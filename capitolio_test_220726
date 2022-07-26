@@ -1,0 +1,119 @@
+# TODO: 1. Crear un script que será ejecutada por cron job para realizar cobros recurrentes. 
+# Este script será ejecutado diariamente. Verificar que el usuario tenga una tarjeta de crédito registrada. 
+# Verificar que el pago haya sido exitoso.
+
+# Modelo User simplificado
+class User(models.Model):
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    referral_code = models.UUIDField(default=uuid.uuid4, editable=False)
+    email = models.EmailField()
+    first_name = models.CharField(max_length=50)
+    last_name = models.CharField(max_length=50)
+    phone = models.CharField(max_length=20, null=True, blank=True)
+    credit_card_token = models.CharField(max_length=50, null=True, blank=True)
+    active_until = models.DateTimeField(null=True, blank=True)
+
+
+
+# Creation of Payment log for keeping track of payments, probably stored in a different part but it should show the expected structure
+class PaymentLog(models.Model):
+    user = models.CharField(max_length=150, null=False, editable=False)
+    amount = models.DecimalField(max_digits=6, decimal_places = 2, null=False,editable=False)
+    date_of_payment = models.DateField(blank=False, null=False)
+    status_of_payment = models.CharField(max_length=150,blank=False, null=False)
+
+from django.db import models
+from .models import PaymentLog, User
+from datetime import datetime
+import datetime    
+
+def process_payments():
+    # Determinar qué usuarios deben pagar el día de hoy basándose en active_until
+    TodayDate = datetime.date.today()
+    
+    #This will create the right strings that will be used for filtering inside the queryset
+    TodayDay = '%02d' % TodayDate.day 
+    TodayMonth = '%02d' % TodayDate.month 
+    TodayYear = '%02d' % TodayDate.year 
+    
+    # List of users to pay in todays date
+    user_list = User.objects.filter(active_until__year = TodayYear,
+                                    active_until__month = TodayMonth,
+                                    active_unitl__day = TodayDay)
+    
+    size_queryset = len(user_list)
+    successful_payments = 0
+    unsuccessful_payments = 0
+    
+    if not user_list:
+        # In case the queryset returns an empty set.
+        print("No payments due today.")
+
+    else:
+        user_list = list(user_list)
+        
+        for single_user in user_list:
+            # Recorrer el listado de usuarios que deben pagar y cobrarles usando la función charge(user=user, amount=100), 
+            # la cual retorna un booleano
+            
+            if charge(single_user['id'],amount = 100):                 # Si charge() devuelve True, enviar correo de pago exitoso usando send_email(user=user, success=True) 
+			
+                send_email(user=single_user['id'],success=True)
+                payment = PaymentLog(user=single_user['id'], amount=100, date_of_payment= TodayDate, status_of_payment = 'True')                
+                payment.save()
+                successful_payments += 1
+				
+            else:                 # Si charge devuelve False, enviar correo de pago fallido usando send_email(user=user, success=False)
+                send_email(user=single_user['id'],success=False)
+                payment = PaymentLog(user=single_user['id'], amount=100, date_of_payment= TodayDate, status_of_payment='False')                
+                payment.save()
+                unsuccessful_payments += 1
+        print("The amount of successful payments was {0} out of {1} payments.".format( successful_payments, size_queryset) )
+        print("The amount of unsuccessful payments was {0} out of {1} payments.".format( unsuccessful_payments, size_queryset) )
+        
+        
+if __name__ == "__main__":
+    process_payments()
+    
+#############################################################################################################################    
+    
+# TODO: 2. Crear un utility function que autentique al usuario antes de realizar una lectura o escritura a BD por medio del API.
+
+# JWT: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1dWlkIjoiYWU0Mi1qYmhzLUJhN2wifQ.7IPCs4e2b6XQkdHt0Tj4B6JUh2VhVjHAgr9Yjl4Xbmk
+
+# Secret: secret
+
+# jwt.io
+
+#Version 0
+#Assuming request.headers['public_key'] = JWT
+#Assuming request.headers['private_key'] = Secret
+import jwt
+
+def authorize(request):
+    try:
+        store_info = jwt.decode(request.headers['public_key'],key=request.headers['private_key'], algorithms=['HS256', ])
+        return(store_info['uuid'])
+    except:
+        return(None)
+
+# Esta vista permite a usuarios con permisos de administrar una tienda en línea editar distintos artículos 
+# (Item, con parámetro creator=models.ForeignKey(User)) creados por ellos. 
+# Al hacer log in, se genera un JWT con las credenciales necesarias para identificar al usuario en cada interacción con el API. 
+# Necesitamos una función para validar que el JWT enviado en el header del request sea auténtico y usar el uuid 
+# en el payload para filtrar los artículos creados por el usuario interactuando con el API.
+
+class ItemView(ModelViewSet):
+    def get_queryset(self):
+        authorized_store = authorize(self.request)
+        # Construir un queryset que utilizará la función de autenticación para filtrar las instancias creadas por el usuario, por ejemplo > return Car.objects.filter(color='blue')
+        
+        queryset = Item.objects.all()
+        
+        if authorized_store not None:
+            return(self.request, queryset.get(Q(creator=authorized_store)))
+        else:
+            print("Please make sure your credentials are correct.")
+            return(Item.objects.none()) 
+    
+    serializer_class = basic_serializers.ItemSerializer
