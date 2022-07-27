@@ -1,0 +1,116 @@
+# TODO: 1. Crear un script que será ejecutada por cron job para realizar cobros recurrentes. 
+# Este script será ejecutado diariamente. Verificar que el usuario tenga una tarjeta de crédito registrada. 
+# Verificar que el pago haya sido exitoso.
+
+# Modelo User simplificado
+class User(models.Model):
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    referral_code = models.UUIDField(default=uuid.uuid4, editable=False)
+    email = models.EmailField()
+    first_name = models.CharField(max_length=50)
+    last_name = models.CharField(max_length=50)
+    phone = models.CharField(max_length=20, null=True, blank=True)
+    credit_card_token = models.CharField(max_length=50, null=True, blank=True)
+    active_until = models.DateTimeField(null=True, blank=True)
+
+
+
+# Creation of Payment log for keeping track of payments, probably stored in a different part but it should show the expected structure
+class PaymentLog(models.Model):
+    user = models.CharField(max_length=150, null=False, editable=False)
+    amount = models.DecimalField(max_digits=6, decimal_places = 2, null=False,editable=False)
+    date_of_payment = models.DateField(blank=False, null=False)
+    status_of_payment = models.CharField(max_length=150,blank=False, null=False)
+    # Added field
+    was_first_try = models.IntegerField(max_length=150,blank=False, null=False)
+
+from django.db import models
+from .models import PaymentLog, User
+from datetime import datetime
+from dateutil.relativedelta import relativedelta
+import datetime    
+
+def process_payments():
+    # Determinar qué usuarios deben pagar el día de hoy basándose en active_until
+    TodayDate = datetime.date.today()
+    
+    #This will create the right strings that will be used for filtering inside the queryset
+    TodayDay = '%02d' % TodayDate.day 
+    TodayMonth = '%02d' % TodayDate.month 
+    TodayYear = '%02d' % TodayDate.year 
+    
+    # List of users to pay in todays date
+    user_list = User.objects.filter(active_until__year = TodayYear,
+                                    active_until__month = TodayMonth,
+                                    active_unitl__day = TodayDay)
+    
+    size_queryset = len(user_list)
+    successful_payments = 0
+    unsuccessful_payments = 0
+    
+    if not user_list:
+        # In case the queryset returns an empty set.
+        print("No payments due today.")
+
+    else:
+        user_list = list(user_list)
+        
+        for single_user in user_list:
+            # Recorrer el listado de usuarios que deben pagar y cobrarles usando la función charge(user=user, amount=100), 
+            # la cual retorna un booleano
+            
+            if charge(single_user['id'],amount = 100):                 # Si charge() devuelve True, enviar correo de pago exitoso usando send_email(user=user, success=True) 
+
+                send_email(user=single_user['id'],success=True)
+                payment = PaymentLog(user=single_user['id'], amount=100, date_of_payment= TodayDate, status_of_payment = 'True',was_first_try='yes')                
+                payment.save()
+                successful_payments += 1
+                
+                #updating single_user active_until field with new upcoming payment
+                #Given than the active_until
+                single_user.active_until += relativedelta(months = 1)
+                single_user.save()
+                
+                # in case the relativedelta cannot be used and needs to be taken into account date special cases as months ending in 31 days or months as february having 29 days or not
+                # a logic can be built around it
+                # if single_user.active_until.month == 1 and single_user.active_until.day >=29:
+                #     if single_user_active_until.year % 4 ==0:
+                #         days_to_add = 31 - single_user.active_until.day+29
+                #         single_user.active_until += datetime.timedelta(days = (days_to_add))
+                #         print(single_user_active_until)
+                #     else:
+                #         days_to_add = 31 - single_user.active_until.day+28
+                #         single_user.active_until += datetime.timedelta(days = (days_to_add))
+                #         print(single_user_active_until)
+                # elif single_user.active_until.month not in [1,3,5,7,8,10,12] and single_user.active_until.month != 2:
+                #     days_to_add = 30 - single_user.active_until.day + 28
+                #     single_user.active_until += datetime.timedelta(days = (30))
+                #     print(single_user.active_until)
+                # elif single_user.active_until.month == 2:
+                #     days_to_add = 28 + int((single_user.active_until.year % 4)==0) - single_user.active_until.day + 28 +int((single_user.active_until.year % 4)==0)
+                #     single_user.active_until += datetime.timedelta(days = (days_to_add))
+                #     print(single_user.active_until)
+                # else:
+                #     single_user.active_until += datetime.timedelta(days = (31))
+                #     print(single_user.active_until)
+
+                
+                
+            else:                 # Si charge devuelve False, enviar correo de pago fallido usando send_email(user=user, success=False)
+                send_email(user=single_user['id'],success=False)
+                payment = PaymentLog(user=single_user['id'], amount=100, date_of_payment= TodayDate, status_of_payment='False'.was_first_try='no')                
+                payment.save()
+                unsuccessful_payments += 1
+                
+                #updating single_user active_until field with next tes
+                single_user.active_until += relativedelta(days = 3)
+                single_user.save()
+                
+        print("The amount of successful payments was {0} out of {1} payments.".format( successful_payments, size_queryset) )
+        print("The amount of unsuccessful payments was {0} out of {1} payments.".format( unsuccessful_payments, size_queryset) )
+        
+        
+if __name__ == "__main__":
+    process_payments()
+    
+#############################################################################################################################    
